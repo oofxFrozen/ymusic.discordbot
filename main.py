@@ -32,7 +32,7 @@ ym_client = Client(config.YM_TOKEN).init()
 
 @bot.event
 async def on_ready():
-    """Function that is called on establishing of the connection"""
+    """Function that is called on establishing the connection"""
     await bot.tree.sync(guild=discord.Object(id=settings['guild']))
     print(f'{bot.user} is ready to serve.')
 
