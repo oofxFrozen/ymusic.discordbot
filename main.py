@@ -8,7 +8,6 @@ from hashlib import md5
 from queue import Queue
 
 import xmltodict
-from dotenv import load_dotenv
 
 import discord
 from discord.ext import commands
@@ -20,9 +19,6 @@ from yandex_music import Client
 
 import config
 from config import settings
-
-
-load_dotenv()
 
 intents = discord.Intents.default()
 intents.members = True
