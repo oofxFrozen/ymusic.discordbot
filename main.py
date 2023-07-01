@@ -117,6 +117,71 @@ async def _play(interaction, request: str):
         await play_the_queue(interaction)
 
 
+@bot.tree.command(name='pause', description="Pauses the currently playing track.",
+                  guild=discord.Object(id=settings['guild']))
+async def _pause(interaction):
+    """/pause command"""
+
+    if len(bot.voice_clients) == 0:
+        await interaction.response.send_message("Not connected to the voice channel at the moment.")
+        return
+
+    vc = bot.voice_clients[0]
+    if not vc or not vc.is_playing():
+        await interaction.response.send_message("Not playing anything at the moment.")
+        return
+
+    await interaction.response.send_message("Paused.")
+    vc.pause()
+
+
+@bot.tree.command(name='resume', description="Resumes the currently paused track.",
+                  guild=discord.Object(id=settings['guild']))
+async def _resume(interaction):
+    """/resume command"""
+
+    if len(bot.voice_clients) == 0:
+        await interaction.response.send_message("Not connected to the voice channel at the moment.")
+        return
+
+    vc = bot.voice_clients[0]
+    if not vc or vc.is_playing():
+        await interaction.response.send_message("Already playing a track.")
+        return
+
+    await interaction.response.send_message("Resumed.")
+    vc.resume()
+
+
+@bot.tree.command(name='queue', description="Shows the track queue.",
+                  guild=discord.Object(id=settings['guild']))
+async def _queue(interaction):
+    """/queue command"""
+    if len(bot.voice_clients) == 0:
+        await interaction.response.send_message("Not connected to the voice channel.")
+        return
+
+    global music_queue
+    global current_track
+    mqueue = music_queue.queue
+    msg = ''
+
+    if current_track is None:
+        await interaction.response.send_message("Queue is empty.")
+        return
+
+    # Forming a string with all the tracks in the queue.
+    msg += f'1. **{current_track.artists[0].name}** - **{current_track.title}** [Playing now] \n'
+    n = min(4, len(mqueue))
+    if len(mqueue) > 4:
+        for i in range(n):
+            track_info = mqueue[i][1]
+            msg += str(i + 2) + f'. **{track_info.artists[0].name}** - **{track_info.title}** \n'
+    msg += f'... and {len(mqueue) - 4} more tracks' if len(mqueue) > 4 else ""
+
+    await interaction.response.send_message(msg)
+
+
 async def add_track_to_queue(track):
     """Function that puts the track to the queue."""
     track_id = f'{track["id"]}:{track["albums"][0]["id"]}'
