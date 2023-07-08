@@ -1,7 +1,6 @@
 # n.sannikov@innopolis.university
 # i.sardanadze@innopolis.university
 
-import os
 import urllib.request
 from asyncio import run
 from hashlib import md5
@@ -12,7 +11,6 @@ import xmltodict
 import discord
 from discord.ext import commands
 from discord import FFmpegPCMAudio
-from discord import app_commands
 
 import yandex_music
 from yandex_music import Client
@@ -97,24 +95,15 @@ async def _play(interaction, request: str):
 
     request_author = interaction.user
 
-    if ym_client.search(request)['tracks'] is None:
-        await interaction.response.send_message("Couldn't find anything.")
-        return
-
-    track: yandex_music.Track = ym_client.search(request)['tracks']['results'][0]
-
-    await interaction.response.send_message("Successfully added **{}** by **{}** to the queue."
-                                            .format(track.title, track.artists[0]['name']))
-
-    await add_track_to_queue(track)
-
     # If bot is not in a voice channel, connect.
     if request_author.voice and len(bot.voice_clients) == 0:
         await request_author.voice.channel.connect()
 
+    await parse_play_command(interaction, request)
+
     # If bot does not stream the audio currently, start the process.
     if not bot.voice_clients[0].is_playing():
-        await play_the_queue(interaction)
+        await play_the_queue()
 
 
 @bot.tree.command(name='pause', description="Pauses the currently playing track.",
@@ -182,12 +171,127 @@ async def _queue(interaction):
     await interaction.response.send_message(msg)
 
 
+@bot.tree.command(name='skip', description="Skips the currently playing track.",
+                  guild=discord.Object(id=settings['guild']))
+async def _skip(interaction):
+    """/skip command"""
+    if len(bot.voice_clients) == 0:
+        await interaction.response.send_message("Not connected to the voice channel.")
+        return
+
+    global current_track
+    global music_queue
+
+    if current_track is None:
+        await interaction.response.send_message("Not playing anything at the moment.")
+        return
+
+    await interaction.response.send_message("Successfully skipped the current track.")
+    bot.voice_clients[0].stop()
+
+
+@bot.tree.command(name='skip_number', description="Skips a number of tracks.",
+                  guild=discord.Object(id=settings['guild']))
+async def _skip_number(interaction, number_of_tracks: int):
+    """/skip_number command"""
+    if len(bot.voice_clients) == 0:
+        await interaction.response.send_message("Not connected to the voice channel.")
+        return
+
+    global current_track
+    global music_queue
+
+    if current_track is None:
+        await interaction.response.send_message("Not playing anything at the moment.")
+        return
+
+    n = len(music_queue.queue) + 1 if number_of_tracks >= len(music_queue.queue) else number_of_tracks
+
+    for _ in range(n - 1):
+        music_queue.get()
+
+    await interaction.response.send_message(f"Successfully skipped {n} tracks.")
+    bot.voice_clients[0].stop()
+
+
+@bot.tree.command(name='skip_all', description="Skips all the tracks in the queue.",
+                  guild=discord.Object(id=settings['guild']))
+async def _skip_all(interaction):
+    """/skip_all command"""
+    if len(bot.voice_clients) == 0:
+        await interaction.response.send_message("Not connected to the voice channel.")
+        return
+
+    global current_track
+    global music_queue
+
+    if current_track is None:
+        interaction.response.send_message("Not playing anything at the moment.")
+        return
+
+    music_queue = Queue(maxsize=0)
+    interaction.response.send_message("Successfully skipped all the tracks.")
+    bot.voice_clients[0].stop()
+
+
+async def parse_play_command(interaction, request: str):
+    """Function that parses the play request and performs an action depending on the type of the content provided"""
+    # If it is not a link, try to search for the track and add it to the queue.
+    if 'music.yandex.ru' not in request:
+        if ym_client.search(request)['tracks'] is None:
+            await interaction.response.send_message("Couldn't find anything.")
+            return
+        track: yandex_music.Track = ym_client.search(request)['tracks']['results'][0]
+        await interaction.response.send_message("Successfully added **{}** by **{}** to the queue."
+                                                .format(track.title, track.artists[0]['name']))
+        await add_track_to_queue(track)
+
+    elif 'playlist' in request:
+        ymlink = request
+        user_id = ymlink.split('users/')[1].split('/playlists')[0]
+        playlist_id = ymlink.split('playlists/')[1]
+        playlist_info = ym_client.users_playlists(playlist_id, user_id=user_id)
+        track_list = playlist_info['tracks']
+        await interaction.response.send_message(
+            'Successfully added *{}* tracks from **{}** *playlist* by **{}** to the queue.'
+            .format(playlist_info.track_count, playlist_info.title, playlist_info.owner.name))
+        await add_playlist_to_queue(track_list)
+
+    elif 'track' in request:
+        ymlink = request
+        album_id = ymlink.split('album/')[1].split('/track')[0]
+        track_id = ymlink.split('track/')[1]
+        track_id = f'{track_id}:{album_id}'
+        await add_track_to_queue(ym_client.tracks(track_id)[0])
+
+    else:
+        ymlink = request
+        album_id = ymlink.split('album/')[1]
+        track_list = ym_client.albums_with_tracks(album_id).volumes[0]
+        album_info = ym_client.albums(album_id)[0]
+
+        await interaction.response.send_message(
+            'Successfully added *{}* tracks from **{}** *album* by **{}** to the queue.'
+            .format(album_info.track_count, album_info.title, album_info.artists[0].name))
+        await add_playlist_to_queue(track_list)
+
+
 async def add_track_to_queue(track):
-    """Function that puts the track to the queue."""
+    """Puts the track to the queue."""
+
     track_id = f'{track["id"]}:{track["albums"][0]["id"]}'
-    link, track_info = await get_track_info(track_id)
-    source = FFmpegPCMAudio(link, **ffmpeg_options, executable='ffmpeg/bin/ffmpeg.exe')
-    music_queue.put([source, track_info])
+    music_queue.put([track_id, track])
+
+    # If bot does not stream the audio currently, start the process.
+    if not bot.voice_clients[0].is_playing():
+        await play_the_queue()
+
+
+async def add_playlist_to_queue(track_list: list):
+    """Adds the whole playlist to the queue."""
+
+    for track in track_list:
+        await add_track_to_queue(track['track'])
 
 
 async def get_track_info(track_id: str):
@@ -202,7 +306,7 @@ async def get_track_info(track_id: str):
     return link, track_info
 
 
-async def play_the_queue(interaction: discord.Interaction):
+async def play_the_queue():
     """Function that starts playing the music queue."""
     global music_queue, current_track
 
@@ -214,13 +318,14 @@ async def play_the_queue(interaction: discord.Interaction):
     # Getting the voice client to stream the audio.
     vc = bot.voice_clients[0]
 
-    # Tracks are stored as lists in format [<source of the audio>, <track information>]
-    track = music_queue.get()
-    track[0].read()
-    current_track = track[1]
+    # Tracks are stored as lists in format [track_id, track_info]
+    track_id = music_queue.get()[0]
+    link, current_track = await get_track_info(track_id)
+    source = FFmpegPCMAudio(link, **ffmpeg_options, executable='ffmpeg/bin/ffmpeg.exe')
+    source.read()
 
     # Stream the audio to voice channel and loop the process until the queue is empty.
-    vc.play(track[0], after=lambda arg: run(play_the_queue(interaction)))
+    vc.play(source, after=lambda arg: run(play_the_queue()))
 
 
 def build_direct_link(tree: dict) -> str:
